@@ -1,0 +1,234 @@
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hiển thị PDF trên web với PDF.js</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        #pdfViewer { width: 100%; max-width: 800px; margin: 20px 0; }
+        #pdfCanvas { border: 1px solid #ccc; display: block; margin: 0 auto; }
+        #searchResult { margin-top: 10px; color: green; }
+        input[type="file"], input[type="text"], button {
+            margin: 10px 0;
+            padding: 10px;
+            font-size: 16px;
+        }
+        #navigation {
+            margin: 10px 0;
+        }
+        #navigation button {
+            padding: 5px 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Hiển thị và tìm kiếm trong file PDF</h1>
+
+    <input type="file" id="pdfInput" accept="application/pdf"/>
+    <br>
+    <input type="text" id="searchKeyword" placeholder="Nhập từ khóa cần tìm">
+    <button onclick="searchKeyword()">Tìm kiếm</button>
+
+    <div id="pdfViewer">
+        <canvas id="pdfCanvas"></canvas>
+    </div>
+
+    <div id="navigation">
+        <button id="prevPage">Trang trước</button>
+        <button id="nextPage">Trang tiếp theo</button>
+        <span>Trang: <span id="pageNum"></span> / <span id="pageCount"></span></span>
+    </div>
+
+    <div id="searchResult"></div>
+
+   
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.14.305/pdf.min.js"></script>
+    <script>
+        let pdfDoc = null,
+        pageNum = 1,
+        pageRendering = false,
+        pageNumPending = null,
+        scale = 1.5,
+        canvas = document.getElementById('pdfCanvas'),
+        ctx = canvas.getContext('2d'),
+        textContents = [];
+
+    // Hàm load PDF
+    function loadPDF(url) {
+        pdfjsLib.getDocument(url).promise.then(function (doc) {
+            pdfDoc = doc;
+            document.getElementById('pageCount').textContent = pdfDoc.numPages;
+
+            // Trích xuất nội dung văn bản từ các trang PDF
+            extractTextFromPDF();
+
+            // Bắt đầu hiển thị trang đầu tiên
+            renderPage(pageNum);
+        });
+    }
+
+    // Hàm render trang PDF trên canvas
+    function renderPage(num, keyword = null) {
+        pageRendering = true;
+        pdfDoc.getPage(num).then(function (page) {
+            let viewport = page.getViewport({ scale: scale });
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            let renderContext = {
+                canvasContext: ctx,
+                viewport: viewport
+            };
+
+            let renderTask = page.render(renderContext);
+
+            renderTask.promise.then(function () {
+                pageRendering = false;
+                if (pageNumPending !== null) {
+                    renderPage(pageNumPending);
+                    pageNumPending = null;
+                }
+
+                // Nếu có từ khóa, thực hiện thay đổi màu từ khóa
+                if (keyword) {
+                    highlightKeyword(page, keyword, viewport);
+                }
+            });
+        });
+
+        document.getElementById('pageNum').textContent = num;
+    }
+
+    // Thay đổi màu từ khóa trên trang PDF
+    function highlightKeyword(page, keyword, viewport) {
+        page.getTextContent().then(function (textContent) {
+            textContent.items.forEach(function (textItem) {
+                if (textItem.str.toLowerCase().includes(keyword.toLowerCase())) {
+                    let tx = pdfjsLib.Util.transform(
+                        pdfjsLib.Util.transform(viewport.transform, textItem.transform),
+                        [1, 0, 0, -1, 0, 0]
+                    );
+
+                    // Tính toán vị trí và kích thước của từ khóa trên canvas
+                    let x = tx[4];
+                    let y = tx[5];
+                    let width = textItem.width * scale;
+                    let height = textItem.height * scale;
+
+                    // Thay đổi màu chữ của từ khóa
+                    ctx.fillStyle = 'yellow';  // Đổi màu thành vàng
+                    ctx.fillText(textItem.str, x, y);
+                }
+            });
+        });
+    }
+
+    // Trích xuất văn bản từ file PDF
+    function extractTextFromPDF() {
+        const totalPages = pdfDoc.numPages;
+        textContents = []; // Lưu văn bản từng trang
+
+        // Duyệt qua các trang và lấy nội dung văn bản
+        for (let i = 1; i <= totalPages; i++) {
+            pdfDoc.getPage(i).then(function (page) {
+                page.getTextContent().then(function (textContent) {
+                    let text = textContent.items.map(item => item.str).join(' ');
+                    textContents[i - 1] = text; // Lưu văn bản trang vào mảng
+                });
+            });
+        }
+    }
+
+    // Hàm tìm kiếm từ khóa trong nội dung văn bản
+    function searchKeyword() {
+        const keyword = document.getElementById('searchKeyword').value.toLowerCase();
+        const resultElement = document.getElementById('searchResult');
+
+        if (!keyword) {
+            resultElement.innerHTML = "Vui lòng nhập từ khóa.";
+            return;
+        }
+
+        let found = false;
+        resultElement.innerHTML = ""; // Xóa kết quả cũ
+
+        for (let i = 0; i < textContents.length; i++) {
+            let pageText = textContents[i].toLowerCase();
+            if (pageText.includes(keyword)) {
+                found = true;
+                // Tạo liên kết dẫn đến trang chứa kết quả và hiển thị dòng chứa từ khóa
+                const snippet = getSnippet(textContents[i], keyword);
+                resultElement.innerHTML += `<a href="#" onclick="goToPage(${i + 1}, '${keyword}')">Tìm thấy tại trang ${i + 1}: ${snippet}</a><br>`;
+            }
+        }
+
+        if (!found) {
+            resultElement.innerHTML = "Không tìm thấy từ khóa.";
+        }
+    }
+
+    // Hàm lấy đoạn văn bản ngắn chứa từ khóa (snippet)
+    function getSnippet(text, keyword) {
+        const keywordIndex = text.toLowerCase().indexOf(keyword);
+        const start = Math.max(0, keywordIndex - 30);
+        const end = Math.min(text.length, keywordIndex + 30);
+        return text.substring(start, end) + '...';
+    }
+
+    // Hàm điều hướng đến trang được tìm thấy và tô vàng từ khóa
+    function goToPage(pageNumFound, keyword) {
+        pageNum = pageNumFound;
+        renderPage(pageNum, keyword);
+    }
+
+    // Chuyển sang trang khác (nếu trang hiện tại đang được render thì đợi)
+    function queueRenderPage(num) {
+        if (pageRendering) {
+            pageNumPending = num;
+        } else {
+            renderPage(num);
+        }
+    }
+
+    // Xử lý chuyển sang trang trước
+    document.getElementById('prevPage').addEventListener('click', function () {
+        if (pageNum <= 1) {
+            return;
+        }
+        pageNum--;
+        queueRenderPage(pageNum);
+    });
+
+    // Xử lý chuyển sang trang tiếp theo
+    document.getElementById('nextPage').addEventListener('click', function () {
+        if (pageNum >= pdfDoc.numPages) {
+            return;
+        }
+        pageNum++;
+        queueRenderPage(pageNum);
+    });
+
+    // Xử lý khi người dùng chọn file PDF
+    document.getElementById('pdfInput').addEventListener('change', function (e) {
+        let file = e.target.files[0];
+        if (file) {
+            let reader = new FileReader();
+            reader.onload = function () {
+                let typedArray = new Uint8Array(this.result);
+                loadPDF(typedArray);
+            };
+            reader.readAsArrayBuffer(file);
+        }
+    });
+
+
+
+    </script>
+
+    
+
+</body>
+</html>
